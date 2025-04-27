@@ -136,7 +136,7 @@ file_name = file_path.split("/")[-1]
 
 VCDU_image = b'\x55\x40'
 VCDU_HK = b'\x40\x3F'
-csv_header = 'Filename,Type,Start_Packet_number,End_Packet_number,Incompleteness(100*missing/16621)\n'
+csv_header = 'Filename,Type,Start_Packet_number,End_Packet_number,Incompleteness\n'
 
 # read the raw data, split the data into packets using sync bytes
 with open(file_path, 'rb') as f:

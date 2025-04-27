@@ -20,7 +20,7 @@ import sys
 
 # Check for new files every x seconds
 check_time = 5 
-csv_header = 'Filename,Type,Start_Packet_number,End_Packet_number,Incompleteness(100*missing/16621)\n'
+csv_header = 'Filename,Type,Start_Packet_number,End_Packet_number,Incompleteness\n'
 
 raw_data_folder = "./raw_data/"
 req_data_folder = "./requested_data/"

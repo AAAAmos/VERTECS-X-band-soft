@@ -171,6 +171,7 @@ DQ_mask = lambda x: (x['DQ'] == 0)
 output_IM_folder_path = "./optical/"
 VCDU_image = b'\x55\x40'
 VCDU_HK = b'\x40\x3F'
+csv_header = 'Filename,Type,Start_Packet_number,End_Packet_number,Incompleteness\n'
 
 if status == 'test':
     tmp_files = glob.glob('./tmp/tmp_*.bin')
@@ -224,14 +225,14 @@ try:
         else:
             fout_name_incpl = './report/un_gen.csv'
             with open(fout_name_incpl, 'w') as f:
-                f.write('Filename,Type,Start_Packet_number,End_Packet_number,Incompleteness(100*missing/16621)\n')
+                f.write(csv_header)
         print(f'Report file: {fout_name_incpl}')
         if os.path.isfile('./report/final_check.csv'):
             fout_name_cpl = './report/final_check.csv'
         else:
             fout_name_cpl = './report/final_check.csv'
             with open(fout_name_cpl, 'w') as f:
-                f.write('Filename,Type,Start_Packet_number,End_Packet_number,Incompleteness(100*missing/16621)\n')
+                f.write(csv_header)
         print(f'Report file: {fout_name_cpl}')
 
         # find the missing segments

@@ -206,7 +206,7 @@ def save_to_csv(folder_name,n_c,data):
     #filename = folder_name + f'{now_t:%Y%m%d%H%M%S}' + '_{0:05}.csv'.format(n_c)
     filename = folder_name + '_{0:05}.csv'.format(n_c)
     with open(filename, mode='w', newline='') as file:
-        file.write('Filename,Type,Start_Packet_number,End_Packet_number,Incompleteness(100*missing/16621),req_rate\n')
+        file.write('Filename,Type,Start_Packet_number,End_Packet_number,Incompleteness,req_rate\n')
         writer = csv.writer(file)
         writer.writerows(data)   
                 
