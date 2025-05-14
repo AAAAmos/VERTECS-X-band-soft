@@ -61,7 +61,7 @@ def command_bin(folder_list,folder_cmd):
         fout_name = f'./cmd/cmd_report_0000_{time_now}.txt'
     else:
         fout_name = cmd_report[-1]
-        if os.path.getsize(fout_name) > 1e6: # size limit of a report file is ~ 1MB
+        if os.path.getsize(fout_name) > 33*1000-1: # one line is 33 bytes 
             print('The last cmd report file is too large, create a new one.')
             dt_now = datetime.datetime.now()
             time_now = dt_now.strftime('%Y%m%d%H%M%S')
@@ -83,9 +83,9 @@ def command_bin(folder_list,folder_cmd):
                 # print(file_name, list_packet_t) # xxx
                 out_cmd_b = myenc.make_command(lists[0],lists[1],lists[2],lists[3])
                 with open(fout_name , 'a') as f:
-                    # f.write('cb 96 '+str(binascii.hexlify(out_cmd_b, ' '))[2:-1]+'\n')
+                    # f.write('cb da'+str(binascii.hexlify(out_cmd_b, ' '))[2:-1]+'\n')
                     # python version < 3.8
-                    f.write('cb 96 ' + ' '.join(f'{b:02x}' for b in out_cmd_b) + '\n')
+                    f.write('cb da' + ' '.join(f'{b:02x}' for b in out_cmd_b) + '\n')
 
     # generate command for delete
     #NOTFIXED_START                
@@ -99,9 +99,9 @@ def command_bin(folder_list,folder_cmd):
             for lists in list_packet_t:
                 out_cmd_b = myenc.make_command(lists[0],lists[1],0,0) #command for delete file (not fixed yet?)
                 with open(fout_name , 'a') as f:
-                    # f.write('cb 96 '+str(binascii.hexlify(out_cmd_b, ' '))[2:-1]+'\n')
+                    # f.write('cb da'+str(binascii.hexlify(out_cmd_b, ' '))[2:-1]+'\n')
                     # python version < 3.8
-                    f.write('cb 96 ' + ' '.join(f'{b:02x}' for b in out_cmd_b) + '\n')
+                    f.write('cb da' + ' '.join(f'{b:02x}' for b in out_cmd_b) + '\n')
                     
     #############################
 

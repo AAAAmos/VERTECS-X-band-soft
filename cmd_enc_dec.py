@@ -7,8 +7,9 @@ import datetime
 #name = 'IM' #'HK'/'IMG'
 
 #######################################################################
-def make_command(file_name,name,id_start,id_end):
-    #F20YYMMDDhhmmss
+def make_command(file_name,id_start,id_end,N):
+    # 4 bytes file name ,3 bytes sequence number, 2 bytes number packet from seq number, 1 byte how many times
+    #20YYMMDDhhmmss
     YY = int(file_name[3:5])
     MM = int(file_name[5:7])
     DD = int(file_name[7:9])
@@ -21,48 +22,22 @@ def make_command(file_name,name,id_start,id_end):
 
     #UNIX timestamp
 
-    if name == 'HK':
-        label=0
-        out_name = label.to_bytes(1,'big')
-        out_ids = id_start.to_bytes(2,'big') + id_end.to_bytes(2,'big')
-    elif name == 'IM':
-        label=1
-        out_name = label.to_bytes(1,'big')
-        out_ids = id_start.to_bytes(2,'big') + id_end.to_bytes(2,'big')
-    elif name == 'OK':
-        label=2
-        out_name = label.to_bytes(1,'big')
-        id_temp = 0
-        out_ids = id_temp.to_bytes(2,'big') + id_temp.to_bytes(2,'big')
-    elif name == 'Error':
-        label=3
-        out_name = label.to_bytes(1,'big')
-        id_temp = 65535
-        out_ids = id_temp.to_bytes(2,'big') + id_temp.to_bytes(2,'big')
-    else:
-        print('ERROR: unknown label')
-        print(name)
-        sys.exit(2)
+    id = id_start.to_bytes(3,'big')
+    number = id_end - id_start + 1
+    id += number.to_bytes(2,'big')
+    n = N.to_bytes(1,'big')
         
-    return out_date + out_name + out_ids
+    return out_date + id + n
 
 ######################################################################
 def decode_command(com):
     
+    com = com[2:]
     fname = datetime.datetime.fromtimestamp(int.from_bytes(com[:4],'big'))
-    file_name = 'F'+f'{fname:%Y%m%d%H%M%S}'+'.dat'
+    file_name = f'{fname:%Y%m%d%H%M%S}'
     #UNIX timestamp
-    
-    if com[4] == 0:
-        label = 'HK'
-    elif com[4] == 1:
-        label = 'IM'
-    elif com[4] == 2:
-        label = 'OK'
-    elif com[4] == 3:
-        label = 'Error'                
-    else:
-        label = 'UNKNOWN'
-    id_start=int.from_bytes(com[5:7],'big')
-    id_end=int.from_bytes(com[7:9],'big')
-    return [file_name,label,id_start,id_end]
+
+    id_start=int.from_bytes(com[5:8],'big')
+    num=int.from_bytes(com[8:10],'big')
+    N=int.from_bytes(com[10:11],'big')
+    return [file_name,id_start,num,N]

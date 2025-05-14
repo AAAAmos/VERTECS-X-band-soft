@@ -13,12 +13,21 @@ import glob
 import os
 import sys
 import pandas as pd
+from collections import Counter
 
 # import psutil
 # def print_memory():
 #     process = psutil.Process(os.getpid())
 #     mem = process.memory_info().rss / (1024 * 1024)  # Memory in MB
 #     print(f"[Memory] {mem:.2f} MB")
+
+SYNC_MARKER = b'\x1A\xCF\xFC\x1D'
+OPT_EXTRA_HEADER = 28      # Optical receiver adds 28 bytes at the beginning
+OPT_EXTRA_TRAILER = 160    # ...and 160 bytes at the end of each packet
+TX_HEADER_SIZE = 28        # Transmitter header after sync marker (2+3+1+22 = 28 bytes)
+MAX_DATA_SIZE = 1087       # Payload size per packet
+
+invalid_vcdu_count = 0
 
 def find_consecutive_ranges(lst):
     
@@ -80,6 +89,44 @@ def encode_data(filename, VCDU, PSC_DF, data_DF, mode, sync_bytes=b'\x1A\xCF\xFC
     except Exception as e:
          print(f"Error writing to file: {e}")
 
+def process_packet(raw_packet):
+    """
+
+    Raw optical packet structure:
+      [Optical Extra Header (28 bytes)] +
+      [Transmitter Packet: (VCDU header (2) + sequence (3) + reserved (1) + MDPU header (22) + payload (MAX_DATA_SIZE))] +
+      [Optical Extra Trailer (160 bytes)]
+      
+    The new MDPU header (22 bytes) is structured as follows:
+      • Bytes  0-1: Reserved (unique ID as 2 bytes, from the first 2 bytes of the provided hex identifier)
+      • Bytes  2-8: Destination callsign (7 bytes, e.g. "JG6YBW\x00")
+      • Bytes  9-15: Unique identifier (4-byte hex derived from the provided hex identifier, padded with 3 null bytes)
+      • Byte     16: Data type (1 byte)
+      • Bytes 17-20: Actual file length (4 bytes, big-endian)
+      • Byte     21: Packet type indicator (1 byte)
+    
+    """
+    global invalid_vcdu_count
+    DQ = raw_packet[1]
+    trimmed = raw_packet[OPT_EXTRA_HEADER:]
+    transmitter_packet = trimmed[:-OPT_EXTRA_TRAILER]
+    if len(transmitter_packet) < TX_HEADER_SIZE: # xxx ? MAX_DATA_SIZE
+        return None
+
+    vcdu = transmitter_packet[0:2]
+    if vcdu != b'\x55\x40':
+        invalid_vcdu_count += 1
+        return None
+
+    seq = int.from_bytes(transmitter_packet[2:5], 'big')
+    mdpu_header = transmitter_packet[6:28]
+    payload = transmitter_packet[28:28+MAX_DATA_SIZE]
+    ptype = mdpu_header[21]
+    actual_file_length = int.from_bytes(mdpu_header[17:21], 'big')
+   
+    file_uid = mdpu_header[9:13].hex()
+    return DQ, seq, ptype, actual_file_length, payload, file_uid, mdpu_header
+
 def DF_raw_data(file_path):
     
     '''
@@ -93,45 +140,52 @@ def DF_raw_data(file_path):
     '''
     
     with open(file_path, 'rb') as f:
-        mpduPackets = f.read().split(b'\x1A\xCF\xFC\x1D')[1:]
+        packet_chunks = f.read().split(SYNC_MARKER)[1:]
 
-    headers = [[], [], [], [], []]
-    for k, packet in enumerate(mpduPackets):
-        # classify the packets by the VCDU header
-        if packet[28:30] == b'\x55\x40':
-            headers[0].append('IM')
-            headers[4].append(packet[56:-160])
-            # headers[4].append(0)
-        elif packet[28:30] == b'\x40\x3F':
-            headers[0].append('HK')
-            headers[4].append(packet[56:-160])
-            # headers[4].append(0)
-        else:
+    DQ, seq, ptype, actual_file_length, payload, file_uid, mdpu_header = [], [], [], [], [], []
+    for chunk in packet_chunks:
+        result = process_packet(chunk)
+        if result is None:
             continue
+        DQ.append(result[0])
+        seq.append(result[1])
+        ptype.append(result[2])
+        actual_file_length.append(result[3])
+        payload.append(result[4])
+        file_uid.append(result[5])
+        mdpu_header.append(result[6])
         
-        headers[1].append(int.from_bytes(packet[30:33], 'big'))
-        headers[2].append(packet[34])
-        headers[3].append(packet[1])
+    lengths = Counter(actual_file_length)
+    types = Counter(ptype)
+    Length = lengths.most_common(1)[0][0]
+    type = types.most_common(1)[0][0]
+    if type == 0x03:
+        Type = 'TXT'
+    elif type == 0x04:
+        Type = 'LOG'
+    elif type == 0x01:
+        Type = 'CSV'
+    elif type == 0x05:
+        Type = 'JPG'
+    elif type == 0x00:
+        Type = 'BIN'
+    else:
+        Type = 'CSV'
         
     dataDF = pd.DataFrame({
-        'VCDU': headers[0],
-        'PSC': pd.Series(headers[1], dtype=int),
-        'IB': headers[2],
-        'DQ': pd.Series(headers[3], dtype=int),
-        'data': pd.Series(headers[4], dtype='object')  # Preserve binary data
+        'PSC': pd.Series(seq, dtype=int),
+        'DQ': pd.Series(DQ, dtype=int),
+        'data': pd.Series(payload, dtype='object')  # Preserve binary data
     })
     
-    return dataDF
+    return dataDF, Length, Type
 
 output_IM_folder_path = "./optical/"
 report_path = "./report/"
 # get the file name to be checked
 files = glob.glob('./raw_data/*.bin')
 files.sort()
-if len(sys.argv)<2:
-    file_path = files[-1]
-else:
-    file_path = sys.argv[1]
+file_path = sys.argv[1]
 file_name = file_path.split("/")[-1]
 
 VCDU_image = b'\x55\x40'
