@@ -70,6 +70,7 @@ def find_consecutive_ranges(lst):
 
 def encode_data(filename, VCDU, PSC_DF, data_DF, mode, sync_bytes=b'\x1A\xCF\xFC\x1D'):
     '''
+    under construction
     '''
     try:
         PSC_list = PSC_DF.values.tolist()
