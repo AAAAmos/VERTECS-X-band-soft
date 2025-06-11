@@ -1,20 +1,8 @@
-'''
-This script reads the raw data, checks completeness of the data, and the data quality.
-------Parameters------
-file_name: the name of the raw data file to be checked (full path). 
-    If no input, the last file in the raw_data folder will be checked.
-------Output------
-The script will write the report to the last report file (.csv) in the report folder.:
-    - If there is no missing image packets, the script will save the image data to the optical folder.
-    - If there are missing image packets, the script will store the incomplete image data to the tmp folder.
-'''
-
 import glob
 import os
 import sys
 import datetime
 import pandas as pd
-from collections import Counter
 
 # import psutil
 # def print_memory():
@@ -68,28 +56,6 @@ def find_consecutive_ranges(lst):
     
     return ranges
 
-def encode_data(filename, VCDU, PSC_DF, data_DF, mode, sync_bytes=b'\x1A\xCF\xFC\x1D'):
-    '''
-    under construction
-    '''
-    try:
-        PSC_list = PSC_DF.values.tolist()
-        data_list = data_DF.values.tolist()
-        with open(filename, mode) as f: 
-            for i in range(0, len(data_DF)):
-                f.write(sync_bytes)
-                f.write(VCDU)
-                # Pack the sequence count into bytes
-                PSC_bytes = PSC_list[i].to_bytes(3, byteorder='big')
-                f.write(PSC_bytes)
-                f.write(data_list[i])
-            if mode == 'wb':
-                print(f"Data write to {filename}")
-            else:
-                print(f"Data append to {filename}")
-    except Exception as e:
-         print(f"Error writing to file: {e}")
-
 def process_packet(raw_packet):
     """
 
@@ -125,7 +91,6 @@ def process_packet(raw_packet):
             The unique identifier of the file.
     """
     global invalid_vcdu_count
-    DQ = raw_packet[1]
     trimmed = raw_packet[OPT_EXTRA_HEADER:]
     transmitter_packet = trimmed[:-OPT_EXTRA_TRAILER]
     if len(transmitter_packet) < TX_HEADER_SIZE: # xxx ? MAX_DATA_SIZE
@@ -141,12 +106,12 @@ def process_packet(raw_packet):
     payload = transmitter_packet[28:28+MAX_DATA_SIZE]
     fname = datetime.datetime.fromtimestamp(int.from_bytes(mdpu_header[9:13],'big'))
     file_uid = fname.strftime('%Y%m%d%H%M%S')
-    ptype = mdpu_header[21]
+    ptype = int.from_bytes(mdpu_header[21], 'big')
     actual_file_length = int.from_bytes(mdpu_header[17:21], 'big')
    
-    return DQ, seq, ptype, actual_file_length, payload, file_uid
+    return seq, ptype, actual_file_length, payload, file_uid
 
-def DF_raw_data(file_path, dq_check=False):
+def DF_raw_data(file_path):
     
     '''
     Read the raw data file and return a DataFrame containing the header information.
@@ -161,44 +126,39 @@ def DF_raw_data(file_path, dq_check=False):
     with open(file_path, 'rb') as f:
         packet_chunks = f.read().split(SYNC_MARKER)[1:]
 
-    DQ, seq, ptype, actual_file_length, payload, file_uid = [], [], [], [], []
+    seq, ptype, actual_file_length, payload, file_uid = [], [], [], [], []
     for chunk in packet_chunks:
         result = process_packet(chunk)
         if result is None:
             continue
-        DQ.append(result[0])
-        seq.append(result[1])
-        if result[2] == 0x03:
-            ptype.append('TXT')
-        elif result[2] == 0x04:
-            ptype.append('LOG')
-        elif result[2] == 0x01:
-            ptype.append('CSV')
-        elif result[2] == 0x05:
-            ptype.append('JPG')
-        elif result[2] == 0x00:
-            ptype.append('BIN')
-        else:
-            ptype.append('UNKNOWN')
-        ptype.append(result[2])
-        actual_file_length.append(result[3])
-        payload.append(result[4])
-        file_uid.append(result[5])
+        seq.append(result[0])
+        # if result[2] == 0x03:
+        #     ptype.append('TXT')
+        # elif result[2] == 0x04:
+        #     ptype.append('LOG')
+        # elif result[2] == 0x01:
+        #     ptype.append('CSV')
+        # elif result[2] == 0x05:
+        #     ptype.append('JPG')
+        # elif result[2] == 0x00:
+        #     ptype.append('BIN')
+        # else:
+        #     ptype.append('UNKNOWN')
+        ptype.append(result[1])
+        actual_file_length.append(result[2])
+        payload.append(result[3])
+        file_uid.append(result[4])
     
     # Create a DataFrame from the collected data
     dataDF = pd.DataFrame({
         'Filename': pd.Series(file_uid, dtype=int),
         'PSC': pd.Series(seq, dtype=int),
-        'DQ': pd.Series(DQ, dtype=int),
-        'Type': pd.Series(ptype),
+        'Type': pd.Series(ptype, dtype=int),
         'Length': pd.Series(actual_file_length, dtype=int),
         'data': pd.Series(payload, dtype='object')  # Preserve binary data
     })
     
-    if dq_check:
-        return dataDF[dataDF['DQ'] == 1]
-    else:
-        return dataDF
+    return dataDF
 
 def find_totalpackets(data):
     """
@@ -219,9 +179,19 @@ def find_totalpackets(data):
     
     return Lengths
     
-def find_missing_packets(file_path):
+def find_missing_packets(data):
+    """
+    Find the missing packets in the raw data file.
+    Input:
+        data: DataFrame
+            The DataFrame containing the raw data.
+    Output:
+        missing_segments: list
+            A list of tuples, each containing the start and end of a missing packet range.
+        missing_rate: float
+            The percentage of missing packets in the file.
+    """
     
-    data = DF_raw_data(file_path)
     Lengths = find_totalpackets(data)
     
     max_psc = data['PSC'].max()
@@ -248,6 +218,40 @@ def find_missing_packets(file_path):
         missing_rate = (len(missed)/max_psc)*100
         return find_consecutive_ranges(list(missed)), missing_rate
 
+def encode_data(filename, data, sync_bytes=SYNC_MARKER):
+    '''
+    Encode the data into a binary file with the specified format.
+    Input:
+        filename: str
+            The name of the file to write the data to.
+        data: DataFrame
+            The DataFrame containing the data to be written.
+        sync_bytes: bytes
+            The sync bytes to be written at the beginning of each packet.
+    '''
+    try:
+        fname_list = data['Filename'].values.tolist()
+        PSC_list = data['PSC'].values.tolist()
+        type_list = data['Type'].values.tolist()
+        length_list = data['Length'].values.tolist()
+        data_list = data['data'].values.tolist()
+        with open(filename, 'wb') as f: 
+            for i in range(0, len(data_list)):
+                f.write(sync_bytes)
+                fname_bytes = fname_list[i].to_bytes(4, byteorder='big')
+                f.write(fname_bytes)
+                PSC_bytes = PSC_list[i].to_bytes(3, byteorder='big')
+                f.write(PSC_bytes)
+                Type_bytes = type_list[i].to_bytes(1, byteorder='big')
+                f.write(Type_bytes)
+                Length_bytes = length_list[i].to_bytes(4, byteorder='big')
+                f.write(Length_bytes)
+                f.write(data_list[i])
+            print(f"Data write to {filename}")
+            
+    except Exception as e:
+         print(f"Error writing to file: {e}")
+
 def main():
     
     # create a output file if needed 
@@ -268,26 +272,31 @@ def main():
     print(f'Report file: {fout_name_cpl}')
     
     try:
-        missing_seg, missing_rate = find_missing_packets(file_path)
+        Data = DF_raw_data(file_path)
+        missing_seg, missing_rate = find_missing_packets(Data)
     
         if missing_seg == -1:
             # the file is empty, report it
             with open(fout_name_incpl, 'a') as f:
                 f.write(f'{raw_file_name},Error,65535,65535,100\n')
-            sys.exit(1)
         elif missing_rate >= Missing_rate_tolerance:
             # the file is completely missing, report it
             with open(fout_name_incpl, 'a') as f:
                 f.write(f'{raw_file_name},Error,65535,65535,100\n')
-            sys.exit(1)
         elif missing_rate < Missing_rate_tolerance:
             outfile = f'./tmp/tmp_{raw_file_name}'
-            # store the incomplete image data
-            encode_data(outfile, VCDU_image, headerDF[IM_mask(headerDF)]['PSC'], headerDF[IM_mask(headerDF)]['data'], 'wb')
+            # store the incomplete mission data
+            encode_data(outfile, DF_raw_data(file_path))
             # output the report for the missing packets
             with open(fout_name_incpl, 'a') as f:
-                for segment in missing_segment_IM:
-                    f.write(f'{raw_file_name},IM,{segment[0]},{segment[1]},{missing_rate_IM+missing_rate_HK}\n')
+                for segment in missing_seg:
+                    f.write(f'{raw_file_name},Missing,{segment[0]},{segment[1]},{missing_rate}\n')
+        elif missing_rate == 0:
+            # the file is complete, save the mission data
+            from read_bin import compile_data
+            compile_data(Data)
+            with open(fout_name_cpl, 'a') as f:
+                f.write(f'{raw_file_name},OK,0,0,0\n')
                     
     except Exception as e:
         # report for unreadable files
@@ -295,59 +304,5 @@ def main():
             f.write(f'{raw_file_name},Error,65535,65535,100\n')
         sys.exit(1)
         
-
 if __name__ == "__main__":
     main()
-
-# check the completeness of the data
-try: 
-    im_mask, hk_mask = headerDF['VCDU'] == 'IM', headerDF['VCDU'] == 'HK'
-    IM, HK = headerDF[im_mask]['PSC'].astype(int), headerDF[hk_mask]['PSC'].astype(int)
-    bad_IM, bad_HK = headerDF[(im_mask)&(headerDF['DQ'] != 0)]['PSC'].astype(int), headerDF[(hk_mask)&(headerDF['DQ'] != 0)]['PSC'].astype(int)
-    IM_range = set(range(0, 16620))
-    max_HK = HK[HK <= 8136].max() # observed, not confrimed by the document
-    HK_range = set(range(int(min(HK)), int(max_HK)+1)) # if the number of HK is fixed, please change the range 
-    IM = set(IM) - set(bad_IM)
-    HK = set(HK) - set(bad_HK)
-    missing_IM = IM_range - set(IM)
-    missing_HK = HK_range - set(HK)
-    missing_IM = sorted(list(missing_IM))
-    missing_HK = sorted(list(missing_HK))
-    missing_rate_IM = (len(missing_IM)/16621)*100
-    missing_rate_HK = (len(missing_HK)/8000)*100 # 8k is for testing, not real
-    missing_segment_IM = find_consecutive_ranges(list(missing_IM))
-    missing_segment_HK = find_consecutive_ranges(list(missing_HK))
-
-    IM_mask = lambda x: (x['VCDU'] == 'IM') & (x['DQ'] == 0)
-    HK_mask = lambda x: (x['VCDU'] == 'HK') & (x['DQ'] == 0) # can be replaced by the packet type that store the fits header information in the future update.    
-    if (missing_rate_IM == 0) and (len(missing_HK) == 0):
-        # no missing packets, save the image data
-        nfiles = len(glob.glob(output_IM_folder_path+'*.bin'))
-        nfiles = str(nfiles).zfill(4)
-        outfile = f'./optical/opt_frame_{nfiles}_{raw_file_name}'  # output file name
-        # write the image data to the optical folder
-        encode_data(outfile, VCDU_image, headerDF[IM_mask(headerDF)]['PSC'], headerDF[IM_mask(headerDF)]['data'], 'wb')
-        # append the HK data to the optical folder
-        encode_data(outfile, VCDU_HK, headerDF[HK_mask(headerDF)]['PSC'], headerDF[HK_mask(headerDF)]['data'], 'ab')
-        # output the report
-        with open(fout_name_cpl, 'a') as f:
-            f.write(f'{raw_file_name},OK,0,0,0\n')
-        # print_memory()
-    else:
-        outfile = f'./tmp/tmp_{raw_file_name}'
-        # store the incomplete image data
-        encode_data(outfile, VCDU_image, headerDF[IM_mask(headerDF)]['PSC'], headerDF[IM_mask(headerDF)]['data'], 'wb')
-        # append the incomplete HK data
-        encode_data(outfile, VCDU_HK, headerDF[HK_mask(headerDF)]['PSC'], headerDF[HK_mask(headerDF)]['data'], 'ab')
-        # output the report for the missing packets
-        with open(fout_name_incpl, 'a') as f:
-            for segment in missing_segment_IM:
-                f.write(f'{raw_file_name},IM,{segment[0]},{segment[1]},{missing_rate_IM+missing_rate_HK}\n')
-            for segment in missing_segment_HK:
-                f.write(f'{raw_file_name},HK,{segment[0]},{segment[1]},{missing_rate_IM+missing_rate_HK}\n')
-
-except Exception as e:
-    # report for unreadable files
-    with open(fout_name_incpl, 'a') as f:
-        f.write(f'{raw_file_name},Error,65535,65535,100\n')
-    sys.exit(1)
