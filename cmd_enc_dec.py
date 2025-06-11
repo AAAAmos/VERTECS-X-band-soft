@@ -9,7 +9,7 @@ import datetime
 #######################################################################
 def make_command(file_name,id_start,id_end,N):
     # 4 bytes file name ,3 bytes sequence number, 2 bytes number packet from seq number, 1 byte how many times
-    #20YYMMDDhhmmss
+    #F20YYMMDDhhmmss
     YY = int(file_name[3:5])
     MM = int(file_name[5:7])
     DD = int(file_name[7:9])
