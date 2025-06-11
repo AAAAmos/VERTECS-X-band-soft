@@ -283,14 +283,19 @@ def main():
             # the file is completely missing, report it
             with open(fout_name_incpl, 'a') as f:
                 f.write(f'{raw_file_name},Error,65535,65535,100\n')
+
         elif missing_rate < Missing_rate_tolerance:
-            outfile = f'./tmp/tmp_{raw_file_name}'
-            # store the incomplete mission data
-            encode_data(outfile, DF_raw_data(file_path))
+            # store the incomplete mission data one by one
+            files = set(list(Data['Filename']))
+            for file_name in files:
+                This_file = Data[Data['Filename']==file_name]  #get the row of the dataframe where Filename is file_name
+                outfile = f'./tmp/tmp_{raw_file_name}_{file_name}'
+                encode_data(outfile, DF_raw_data(This_file))
             # output the report for the missing packets
             with open(fout_name_incpl, 'a') as f:
                 for segment in missing_seg:
                     f.write(f'{raw_file_name},Missing,{segment[0]},{segment[1]},{missing_rate}\n')
+
         elif missing_rate == 0:
             # the file is complete, save the mission data
             from read_bin import compile_data
