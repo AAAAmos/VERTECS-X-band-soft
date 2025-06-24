@@ -6,40 +6,40 @@ import datetime
 import pandas as pd
 
 from constants import *
-from utility import process_packet
+from utility import process_packet # for DF_raw_data
 from utility import DF_raw_data
 from utility import encode_data
-from utility import find_consecutive_ranges
+from utility import find_consecutive_ranges # for find_missing_packets
+from utility import find_totalpackets # for find_missing_packets
+from utility import find_missing_packets
 from utility import DF_tmp_data
 
-status = 'test'
+output_IM_folder_path = "./optical/"
 
 def main():
     
-
-IM_mask = lambda x: (x['VCDU'] == 'IM')
-HK_mask = lambda x: (x['VCDU'] == 'HK')
-DQ_mask = lambda x: (x['DQ'] == 0)
-
-output_IM_folder_path = "./optical/"
-VCDU_image = b'\x55\x40'
-VCDU_HK = b'\x40\x3F'
-csv_header = 'Filename,Type,Start_Packet_number,End_Packet_number,Incompleteness\n'
-
-if status == 'test':
-    tmp_files = glob.glob('./tmp/tmp_*.bin')
-    mock_request = glob.glob('./requested_data/*.bin')
-    requested_data = DF_raw_data(mock_request[-1])
-else:
     requested_file = sys.argv[1]
-    requested_data = DF_raw_data(requested_file)
-    incomplete_files = list(set(requested_data['ID'])) # assumption
-    tmp_files = []
-    for id in incomplete_files:
-        tmp_files.append(glob.glob(f'./tmp/tmp_*{id}*.bin')[0])
-        if len(tmp_files) == 0:
-            print(f'No tmp file found for {id}')
-            continue
+    
+    try:
+        requested_Data = DF_raw_data(requested_file) # PLEASE CHECK the format of requested file!
+        requested_files = list(set(requested_Data['Filename']))
+        
+        for id in requested_files:
+            tmp_file = glob.glob(f'./tmp/tmp_*_{id}.bin')[0]
+            
+            if len(tmp_file) == 0:
+                print(f'Extracting required file {requested_file}. tmp file {id} not found.')
+                continue
+            
+            tmp_data = DF_tmp_data(tmp_file)
+            requested_data = requested_Data[requested_Data['Filename'] == id]
+            
+            
+    
+    except Exception as e:
+        print(f"Error: {e}. Input file unknown.")
+        sys.exit(3)
+
 
 try:
     for file_name in tmp_files:
