@@ -1,139 +1,182 @@
-'''
-This script is used to read the re-downloaded missing packets (RMP) and merge them with the incomplete data (IC).
-It reads the RMP files, identifies which ICs they belong to, and merges them with the ICs. (ongoing)
-------Input------
-1. Read the RMP files and the IC files.
-2. Identify which ICs the RMP files belong to. (ongoing)
-------Output------
-1. If there are no missing packets in the re-combined file, the script will save the image data to the optical folder.
-2. If there are missing packets in the re-combined file, the script will save the incomplete image data to the tmp folder, replace the original IC.
-3. The script will output a report file to the report folder.
-'''
-
 import glob
 import os
 import subprocess
 import sys
+import datetime
 import pandas as pd
 
-# import psutil
-# def print_memory():
-#     process = psutil.Process(os.getpid())
-#     mem = process.memory_info().rss / (1024 * 1024)  # Memory in MB
-#     print(f"[Memory] {mem:.2f} MB")
+SYNC_MARKER = b'\x1A\xCF\xFC\x1D'
+VCDU_head = b'\x55\x40'
+OPT_EXTRA_HEADER = 28      # Optical receiver adds 28 bytes at the beginning
+OPT_EXTRA_TRAILER = 160    # ...and 160 bytes at the end of each packet
+TX_HEADER_SIZE = 28        # Transmitter header after sync marker (2+3+1+22 = 28 bytes)
+MAX_DATA_SIZE = 1087       # Payload size per packet
+MAX_packet_number = 3e5    # Maximum number of packets in a file NEED TO BE CONFIRMED
+invalid_vcdu_count = 0
+
+Missing_rate_tolerance = 50 # Tolerance for missing rate, if the missing rate is larger than this value, request for whole file.
+output_IM_folder_path = "./optical/"
+report_path = "./report/"
 
 def DF_tmp_data(file_name):
     
     '''
-    Read the tmp data file and return a DataFrame containing the header information.
-    Input:
-        file_name: str
-            The name of the tmp data file.
-    Output:
-        dataDF: DataFrame
-            The DataFrame containing the header information.
+    Decode the temporary data file compiled by encode_data function.
     '''
     
     with open(file_name, 'rb') as f:
-        mpduPackets = f.read().split(b'\x1A\xCF\xFC\x1D')[1:]
+        mpduPackets = f.read().split(SYNC_MARKER)[1:]
 
-    headers = [[], [], []]
-    for k, packet in enumerate(mpduPackets):
-        # classify the packets by the VCDU header
-        if packet[:2] == b'\x55\x40':
-            headers[0].append('IM')
-            headers[2].append(packet[5:])
-        elif packet[:2] == b'\x40\x3F':
-            headers[0].append('HK')
-            headers[2].append(packet[5:])
-        else:
-            continue
-        
-        headers[1].append(int.from_bytes(packet[2:5], 'big'))
+    for packet in mpduPackets:
+        fname = datetime.datetime.fromtimestamp(int.from_bytes(packet[:4],'big'))
+        psc = int.from_bytes(packet[4:7], 'big')
+        ptype = int.from_bytes(packet[7:8], 'big')
+        length = int.from_bytes(packet[8:12], 'big')
+        data = packet[12:]
         
     headerDF = pd.DataFrame({
-        'VCDU': headers[0],
-        'PSC': pd.Series(headers[1], dtype=int),
-        'data': pd.Series(headers[2], dtype='object')  # Preserve binary data
+        'Filename': pd.Series(fname, dtype=int),
+        'PSC': pd.Series(psc, dtype=int),
+        'Type': pd.Series(ptype, dtype=int),
+        'Length': pd.Series(length, dtype=int),
+        'data': pd.Series(data, dtype='object')  # Preserve binary data
     })
     
     return headerDF
 
-def DF_raw_data(file_name):
+def process_packet(raw_packet):
+    """
+
+    Raw optical packet structure:
+      [Optical Extra Header (28 bytes)] +
+      [Transmitter Packet: (VCDU header (2) + sequence (3) + reserved (1) + MDPU header (22) + payload (MAX_DATA_SIZE))] +
+      [Optical Extra Trailer (160 bytes)]
+      
+    The new MDPU header (22 bytes) is structured as follows:
+      • Bytes  0-1: Reserved (unique ID as 2 bytes, from the first 2 bytes of the provided hex identifier)
+      • Bytes  2-8: Destination callsign (7 bytes, e.g. "JG6YBW\x00")
+      • Bytes  9-15: Unique identifier (4-byte hex derived from the provided hex identifier, padded with 3 null bytes)
+      • Byte     16: Data type (1 byte)
+      • Bytes 17-20: Actual file length (4 bytes, big-endian)
+      • Byte     21: Packet type indicator (1 byte)
+      
+    This function processes a raw packet and extracts the relevant information.
+    Input:
+        raw_packet: bytes
+            The raw packet data to process.
+    Output:
+        DQ: int
+            The data quality indicator.
+        seq: int
+            The sequence number of the packet.
+        ptype: bin
+            The packet type indicator.
+        actual_file_length: int
+            The actual length of the file.
+        payload: bytes
+            The payload data of the packet.
+        file_uid: str
+            The unique identifier of the file.
+    """
+    global invalid_vcdu_count
+    trimmed = raw_packet[OPT_EXTRA_HEADER:]
+    transmitter_packet = trimmed[:-OPT_EXTRA_TRAILER]
+    if len(transmitter_packet) < TX_HEADER_SIZE: # xxx ? MAX_DATA_SIZE
+        return None
+
+    vcdu = transmitter_packet[0:2]
+    if vcdu != VCDU_head:
+        invalid_vcdu_count += 1
+        return None
+
+    seq = int.from_bytes(transmitter_packet[2:5], 'big')
+    mdpu_header = transmitter_packet[6:28]
+    payload = transmitter_packet[28:28+MAX_DATA_SIZE]
+    fname = datetime.datetime.fromtimestamp(int.from_bytes(mdpu_header[9:13],'big'))
+    file_uid = fname.strftime('%Y%m%d%H%M%S')
+    ptype = int.from_bytes(mdpu_header[21], 'big')
+    actual_file_length = int.from_bytes(mdpu_header[17:21], 'big')
+   
+    return seq, ptype, actual_file_length, payload, file_uid
+
+def DF_raw_data(file_path):
     
     '''
     Read the raw data file and return a DataFrame containing the header information.
     Input:
-        file_name: str
-            The name of the raw data file.
+        file_path: str
+            The path of the raw data file.
     Output:
         dataDF: DataFrame
             The DataFrame containing the header information.
     '''
     
-    with open(file_name, 'rb') as f:
-        mpduPackets = f.read().split(b'\x1A\xCF\xFC\x1D')[1:]
+    with open(file_path, 'rb') as f:
+        packet_chunks = f.read().split(SYNC_MARKER)[1:]
 
-    headers = [[], [], [], [], []]
-    for k, packet in enumerate(mpduPackets):
-        # classify the packets by the VCDU header
-        if packet[28:30] == b'\x55\x40':
-            headers[0].append('IM')
-            headers[4].append(packet[56:-160])
-            # headers[4].append(0)
-        elif packet[28:30] == b'\x40\x3F':
-            headers[0].append('HK')
-            headers[4].append(packet[56:-160])
-            # headers[4].append(0)
-        else:
+    seq, ptype, actual_file_length, payload, file_uid = [], [], [], [], []
+    for chunk in packet_chunks:
+        result = process_packet(chunk)
+        if result is None:
             continue
-        
-        headers[1].append(int.from_bytes(packet[30:33], 'big'))
-        headers[2].append(packet[34])
-        headers[3].append(packet[1])
-        
+        seq.append(result[0])
+        ptype.append(result[1])
+        actual_file_length.append(result[2])
+        payload.append(result[3])
+        file_uid.append(result[4])
+    
+    # Create a DataFrame from the collected data
     dataDF = pd.DataFrame({
-        'VCDU': headers[0],
-        'PSC': pd.Series(headers[1], dtype=int),
-        'IB': headers[2],
-        'DQ': pd.Series(headers[3], dtype=int),
-        'data': pd.Series(headers[4], dtype='object')  # Preserve binary data
+        'Filename': pd.Series(file_uid, dtype=int),
+        'PSC': pd.Series(seq, dtype=int),
+        'Type': pd.Series(ptype, dtype=int),
+        'Length': pd.Series(actual_file_length, dtype=int),
+        'data': pd.Series(payload, dtype='object')  # Preserve binary data
     })
     
     return dataDF
+    return dataDF
 
-def encode_data(filename, VCDU, PSC_DF, data_DF, mode, sync_bytes=b'\x1A\xCF\xFC\x1D'):
+def encode_data(filename, data, sync_bytes=SYNC_MARKER):
     '''
-    Used for store incomplete data.
-    ------Parameters------
-    filename: str
-        The name of the file to write to.
-    VCDU: bytes
-        The VCDU header for identifying the data.
-    PSC_DF: DataFrame
-        The DataFrame containing the PSC values.
-    data_DF: DataFrame
-        The DataFrame containing the data values.
-    mode: str
-        The mode to open the file in. 'wb' and 'ab'.
-    sync_bytes: bytes
-        The sync bytes to use to separate records.
+    Store the incomplete data into a binary file at ./tmp/ with the specified format.
+    Input:
+        filename: str
+            The name of the file to write the data to.
+        data: DataFrame
+            The DataFrame containing the data to be written.
+        sync_bytes: bytes
+            The sync bytes to be written at the beginning of each packet.
     '''
     try:
-        PSC_list = PSC_DF.values.tolist()
-        data_list = data_DF.values.tolist()
-        with open(filename, mode) as f: 
-            for i in range(0, len(data_DF)):
+        fname_list = data['Filename'].values.tolist()
+        PSC_list = data['PSC'].values.tolist()
+        type_list = data['Type'].values.tolist()
+        length_list = data['Length'].values.tolist()
+        data_list = data['data'].values.tolist()
+        with open(filename, 'wb') as f: 
+            for i in range(0, len(data_list)):
                 f.write(sync_bytes)
-                f.write(VCDU)
-                # Pack the sequence count into bytes
+                # Convert the filename to a datetime object and then to Unix time
+                YYYY = int(fname_list[i][:4])
+                MM = int(fname_list[i][4:6])
+                DD = int(fname_list[i][6:8])
+                hh = int(fname_list[i][8:10])
+                mm = int(fname_list[i][10:12])
+                ss = int(fname_list[i][12:14])
+                fname = datetime.datetime(YYYY,MM,DD,hh,mm,ss)
+                unix_time = int(fname.timestamp())
+                fname_bytes = unix_time.to_bytes(4, byteorder='big')
+                f.write(fname_bytes)
                 PSC_bytes = PSC_list[i].to_bytes(3, byteorder='big')
                 f.write(PSC_bytes)
+                Type_bytes = type_list[i].to_bytes(1, byteorder='big')
+                f.write(Type_bytes)
+                Length_bytes = length_list[i].to_bytes(4, byteorder='big')
+                f.write(Length_bytes)
                 f.write(data_list[i])
-            if mode == 'wb':
-                print(f"Data write to {filename}")
-            else:
-                print(f"Data append to {filename}")
+            print(f"Data write to {filename}")
+            
     except Exception as e:
          print(f"Error writing to file: {e}")
 
@@ -151,6 +194,7 @@ def find_consecutive_ranges(lst):
         return []
     
     ranges = []
+    lst = sorted(lst)
     start = lst[0]
     
     for i in range(1, len(lst)):

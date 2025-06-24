@@ -1,6 +1,6 @@
 import glob
 import os
-import sys
+import sys 
 import datetime
 import pandas as pd
 
@@ -16,7 +16,7 @@ OPT_EXTRA_HEADER = 28      # Optical receiver adds 28 bytes at the beginning
 OPT_EXTRA_TRAILER = 160    # ...and 160 bytes at the end of each packet
 TX_HEADER_SIZE = 28        # Transmitter header after sync marker (2+3+1+22 = 28 bytes)
 MAX_DATA_SIZE = 1087       # Payload size per packet
-MAX_packet_number = 3e5    # Maximum number of packets in a file NEED TO BE CONFIRMED
+MAX_PACKET_NUMBER = 3e5    # Maximum number of packets in a file NEED TO BE CONFIRMED
 invalid_vcdu_count = 0
 
 Missing_rate_tolerance = 50 # Tolerance for missing rate, if the missing rate is larger than this value, request for whole file.
@@ -132,18 +132,6 @@ def DF_raw_data(file_path):
         if result is None:
             continue
         seq.append(result[0])
-        # if result[2] == 0x03:
-        #     ptype.append('TXT')
-        # elif result[2] == 0x04:
-        #     ptype.append('LOG')
-        # elif result[2] == 0x01:
-        #     ptype.append('CSV')
-        # elif result[2] == 0x05:
-        #     ptype.append('JPG')
-        # elif result[2] == 0x00:
-        #     ptype.append('BIN')
-        # else:
-        #     ptype.append('UNKNOWN')
         ptype.append(result[1])
         actual_file_length.append(result[2])
         payload.append(result[3])
@@ -195,11 +183,11 @@ def find_missing_packets(data):
     Lengths = find_totalpackets(data)
     
     max_psc = data['PSC'].max()
-    if max_psc > MAX_packet_number:
+    if max_psc > MAX_PACKET_NUMBER:
         n = list(data['PSC'])
         n.sort(reverse=True)
         for i in range(len(n)):
-            if n[i]<= MAX_packet_number:
+            if n[i]<= MAX_PACKET_NUMBER:
                 max_psc = n[i]
                 break
     else:
@@ -220,7 +208,7 @@ def find_missing_packets(data):
 
 def encode_data(filename, data, sync_bytes=SYNC_MARKER):
     '''
-    Encode the data into a binary file with the specified format.
+    Store the incomplete data into a binary file at ./tmp/ with the specified format.
     Input:
         filename: str
             The name of the file to write the data to.
@@ -238,7 +226,16 @@ def encode_data(filename, data, sync_bytes=SYNC_MARKER):
         with open(filename, 'wb') as f: 
             for i in range(0, len(data_list)):
                 f.write(sync_bytes)
-                fname_bytes = fname_list[i].to_bytes(4, byteorder='big')
+                # Convert the filename to a datetime object and then to Unix time
+                YYYY = int(fname_list[i][:4])
+                MM = int(fname_list[i][4:6])
+                DD = int(fname_list[i][6:8])
+                hh = int(fname_list[i][8:10])
+                mm = int(fname_list[i][10:12])
+                ss = int(fname_list[i][12:14])
+                fname = datetime.datetime(YYYY,MM,DD,hh,mm,ss)
+                unix_time = int(fname.timestamp())
+                fname_bytes = unix_time.to_bytes(4, byteorder='big')
                 f.write(fname_bytes)
                 PSC_bytes = PSC_list[i].to_bytes(3, byteorder='big')
                 f.write(PSC_bytes)
@@ -279,6 +276,7 @@ def main():
             # the file is empty, report it
             with open(fout_name_incpl, 'a') as f:
                 f.write(f'{raw_file_name},Error,65535,65535,100\n')
+                
         elif missing_rate >= Missing_rate_tolerance:
             # the file is completely missing, report it
             with open(fout_name_incpl, 'a') as f:
@@ -289,6 +287,13 @@ def main():
             files = set(list(Data['Filename']))
             for file_name in files:
                 This_file = Data[Data['Filename']==file_name]  #get the row of the dataframe where Filename is file_name
+                actual_length = This_file['PSC'].values().max()-This_file['PSC'].values().min()
+                if actual_length == This_file['Length'].values[0]:
+                    # compile the complete file
+                    from read_bin import compile_data
+                    compile_data(This_file)
+                    continue # next file
+                # save the incomplete file
                 outfile = f'./tmp/tmp_{raw_file_name}_{file_name}'
                 encode_data(outfile, DF_raw_data(This_file))
             # output the report for the missing packets
@@ -300,6 +305,7 @@ def main():
             # the file is complete, save the mission data
             from read_bin import compile_data
             compile_data(Data)
+            # output the report for the complete file
             with open(fout_name_cpl, 'a') as f:
                 f.write(f'{raw_file_name},OK,0,0,0\n')
                     
