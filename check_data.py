@@ -13,8 +13,6 @@ from utility import find_missing_packets
 from utility import encode_data
 
 # get the file name to be checked
-files = glob.glob('./raw_data/*.bin')
-files.sort()
 file_path = sys.argv[1]
 raw_file_name = file_path.split("/")[-1]
 
