@@ -121,25 +121,6 @@ def find_consecutive_ranges(lst):
     
     return ranges
 
-def find_totalpackets(data):
-    """
-    Find the total number of packets in the raw data file.
-    Input:
-        data: DataFrame
-    Output:
-        total_packets: int
-            The total number of packets in the file.
-    """
-    filenames = set(list(data['Filename']))
-    Lengths = 0
-    for filename in filenames:
-        lengths = data[data['Filename'] == filename]['Length']
-        if set(lengths) != 1:
-            Lengths += 0
-        else:Lengths += lengths.iloc[0]
-    
-    return Lengths
-
 def find_missing_packets(data):
     """
     Find the missing packets in the raw data file.
@@ -153,30 +134,14 @@ def find_missing_packets(data):
             The percentage of missing packets in the file.
     """
     
-    Lengths = find_totalpackets(data)
-    
-    max_psc = data['PSC'].max()
-    if max_psc > MAX_PACKET_NUMBER:
-        n = list(data['PSC'])
-        n.sort(reverse=True)
-        for i in range(len(n)):
-            if n[i]<= MAX_PACKET_NUMBER:
-                max_psc = n[i]
-                break
-    else:
-        pass
+    Lengths = data['Length'].iloc[0]
     
     if Lengths == 0: # nothing in the file
         return -1, 100
-    elif Lengths >= max_psc: # every file is not completely missing 
+    else: 
         PSC = set(range(1, Lengths+1))
         missed = PSC - set(data['PSC'])
         missing_rate = (len(missed)/Lengths)*100
-        return find_consecutive_ranges(list(missed)), missing_rate
-    else: # Lengths < max_psc, at least one file is completely missing, can't find the true length of the file
-        PSC = set(range(1, max_psc+1))
-        missed = PSC - set(data['PSC'])
-        missing_rate = (len(missed)/max_psc)*100
         return find_consecutive_ranges(list(missed)), missing_rate
 
 def encode_data(filename, data, sync_bytes=SYNC_MARKER):
